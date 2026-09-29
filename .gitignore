@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Customer data. Snapshot and DSN map contain credentials.
+snapshot.json
+state.json
+dsn-map.json
+manual-checklist.md
