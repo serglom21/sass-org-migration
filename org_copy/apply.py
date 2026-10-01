@@ -108,6 +108,7 @@ def apply_snapshot(
 
     _apply_org(snapshot, sink, dest, report)
     _apply_teams(snapshot, sink, dest, state, state_path, options, team_map)
+    _apply_existing_member_teams(snapshot, sink, dest, report)
     _apply_projects(snapshot, client, sink, dest, state, state_path, options, report, team_map, project_map)
     _apply_forwarders(snapshot, sink, dest, state, state_path, options, project_map, report)
     _apply_detectors(snapshot, sink, dest, state, state_path, options, team_map, user_map, project_map, detector_map, report)
@@ -118,6 +119,7 @@ def apply_snapshot(
     _apply_monitors(snapshot, sink, dest, state, state_path, options, team_map, user_map, project_map, report)
     _apply_dashboards(snapshot, sink, dest, state, state_path, options, team_map, project_map, report)
     _apply_queries(snapshot, sink, dest, state, state_path, options, project_map, report)
+    _apply_recent_searches(snapshot, sink, dest, report)
     _apply_views(snapshot, sink, dest, state, state_path, options, project_map, report)
     if options.send_invites:
         _apply_invites(snapshot, sink, dest, report)
@@ -141,6 +143,7 @@ class _DestIndex:
         self.monitors_by_slug: dict[str, dict[str, Any]] = {}
         self.dashboards_by_title: dict[str, dict[str, Any]] = {}
         self.queries_by_name: dict[str, dict[str, Any]] = {}
+        self.recent_searches: list[dict[str, Any]] = []
         self.views_by_name: dict[str, dict[str, Any]] = {}
         self.forwarders_by_provider: dict[str, dict[str, Any]] = {}
         self.alert_rules_by_name: dict[str, dict[str, Any]] = {}
@@ -170,6 +173,10 @@ class _DestIndex:
         index.monitors_by_slug = _by(client, f"/organizations/{client.org}/monitors/", "slug", report, "monitors")
         index.dashboards_by_title = _by(client, f"/organizations/{client.org}/dashboards/", "title", report, "dashboards")
         index.queries_by_name = _by(client, f"/organizations/{client.org}/discover/saved/", "name", report, "saved queries")
+        recent, recent_error = client.get_optional_list(f"/organizations/{client.org}/recent-searches/", LIST_PARAMS)
+        if recent_error and recent_error.status != 404:
+            report.failures.append({"step": "list destination recent searches", "detail": error_text(recent_error)})
+        index.recent_searches = recent
         views, view_error = client.get_optional_list(
             f"/organizations/{client.org}/group-search-views/",
             {"createdBy": "me", **LIST_PARAMS},
@@ -281,8 +288,15 @@ def _apply_teams(
             continue
         existing = dest.teams_by_slug.get(slug)
         if existing:
-            sink.skip(f"team {slug}")
             team_map[str(team.get("id"))] = str(existing.get("id"))
+            wanted = team.get("name") or slug
+            if existing.get("name") != wanted:
+                try:
+                    sink.put(f"/teams/{org}/{slug}/", {"name": wanted}, f"team name {slug}")
+                except ApiError as exc:
+                    _fail(sink.report, f"team name {slug}", exc)
+            else:
+                sink.skip(f"team {slug}")
             continue
         try:
             created = sink.post(
@@ -297,6 +311,44 @@ def _apply_teams(
         team_map[str(team.get("id"))] = dest_id
         dest.teams_by_slug[slug] = created
         _remember(state, "teams", team.get("id"), dest_id, state_path, options.dry_run)
+
+
+def _apply_existing_member_teams(
+    snapshot: dict[str, Any],
+    sink: Sink,
+    dest: _DestIndex,
+    report: ApplyReport,
+) -> None:
+    """Add people who already belong to the destination org onto the copied teams."""
+    org = sink.client.org
+    for member in snapshot.get("members") or []:
+        email = member_email(member)
+        dest_member = dest.members_by_email.get(email)
+        if not email or not dest_member or dest_member.get("pending"):
+            continue
+        member_id = dest_member.get("id")
+        if not member_id:
+            continue
+        current = set()
+        for item in dest_member.get("teamSlugs") or dest_member.get("teams") or []:
+            if isinstance(item, str):
+                current.add(item)
+            elif isinstance(item, dict) and item.get("slug"):
+                current.add(item["slug"])
+        for slug in member.get("teamSlugs") or []:
+            if slug in current or slug not in dest.teams_by_slug:
+                continue
+            try:
+                sink.post(
+                    f"/organizations/{org}/members/{member_id}/teams/{slug}/",
+                    {},
+                    f"team membership {email} on {slug}",
+                )
+            except ApiError as exc:
+                _fail(report, f"team membership {email} on {slug}", exc)
+                continue
+            current.add(slug)
+            dest_member.setdefault("teamSlugs", []).append(slug)
 
 
 def _apply_projects(
@@ -847,6 +899,30 @@ def _apply_queries(
             continue
         dest.queries_by_name[name] = created
         _remember(state, "queries", query.get("id"), created.get("id"), state_path, options.dry_run)
+
+
+def _apply_recent_searches(snapshot: dict[str, Any], sink: Sink, dest: _DestIndex, report: ApplyReport) -> None:
+    org = sink.client.org
+    seen = {(item.get("type", 0), item.get("query")) for item in dest.recent_searches}
+    for search in snapshot.get("recentSearches") or []:
+        query = search.get("query")
+        if not query:
+            continue
+        kind = search.get("type", 0)
+        if (kind, query) in seen:
+            sink.skip(f"recent search {query}")
+            continue
+        try:
+            created = sink.post(
+                f"/organizations/{org}/recent-searches/",
+                {"type": kind, "query": query},
+                f"recent search {query}",
+            )
+        except ApiError as exc:
+            _fail(report, f"recent search {query}", exc)
+            continue
+        dest.recent_searches.append(created if isinstance(created, dict) else {"type": kind, "query": query})
+        seen.add((kind, query))
 
 
 def _apply_views(

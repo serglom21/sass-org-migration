@@ -378,6 +378,11 @@ def detector_create_body(detector: dict[str, Any], owner: str | None) -> dict[st
         ):
             if key in query and query[key] is not None:
                 item[key] = query[key]
+        # A null source environment means all environments. Omit is rejected, and "" is rejected as blank.
+        environment = query.get("environment")
+        item["environment"] = environment if isinstance(environment, str) and environment else None
+        if "queryType" not in item:
+            item["queryType"] = 1 if item.get("dataset") == "events_analytics_platform" else 0
         if item:
             sources.append(item)
     group = detector.get("conditionGroup") if isinstance(detector.get("conditionGroup"), dict) else {}
@@ -620,6 +625,7 @@ def saved_query_body(query: dict[str, Any], project_map: dict[str, str]) -> dict
         "range": query.get("range"),
         "yAxis": query.get("yAxis") or [],
         "queryDataset": query.get("queryDataset"),
+        "version": query.get("version") or 2,
     }
     return {key: value for key, value in body.items() if value is not None}
 

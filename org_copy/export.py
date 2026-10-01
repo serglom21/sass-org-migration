@@ -49,6 +49,10 @@ def export_snapshot(client: SentryClient) -> dict[str, Any]:
         f"/organizations/{org}/discover/saved/", LIST_PARAMS
     )
     _note_optional(errors, "saved queries", query_error)
+    recent_searches, recent_error = client.get_optional_list(
+        f"/organizations/{org}/recent-searches/", LIST_PARAMS
+    )
+    _note_optional(errors, "recent searches", recent_error)
     my_views, my_error = client.get_optional_list(
         f"/organizations/{org}/group-search-views/",
         {"createdBy": "me", **LIST_PARAMS},
@@ -85,6 +89,11 @@ def export_snapshot(client: SentryClient) -> dict[str, Any]:
         "monitors": monitors,
         "dashboards": dashboards,
         "savedQueries": saved_queries,
+        "recentSearches": [
+            {"id": str(item.get("id") or ""), "type": item.get("type", 0), "query": item.get("query") or ""}
+            for item in recent_searches
+            if isinstance(item, dict) and item.get("query")
+        ],
         "issueViews": {"mine": my_views, "others": other_views},
         "forwarders": forwarders,
         "integrations": [_public_integration(item) for item in integrations],

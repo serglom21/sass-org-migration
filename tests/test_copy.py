@@ -144,6 +144,8 @@ class CopyTests(unittest.TestCase):
         self.assertTrue(keys["Loader"]["dynamicSdkLoaderOptions"]["hasReplay"])
         self.assertEqual(len(project["detectors"]), 1)
         self.assertEqual(project["detectors"][0]["type"], "metric_issue")
+        self.assertIsNone(project["detectors"][0]["dataSources"][0]["environment"])
+        self.assertEqual(project["detectors"][0]["dataSources"][0]["queryType"], 0)
         self.assertTrue(project["detectors"][0]["owner"].startswith("team:"))
         workflow = dest.workflows[0]
         actions = workflow["actionFilters"][0]["actions"]
@@ -160,12 +162,17 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(dest.dashboards[0]["projects"], [int(project["id"])])
         self.assertEqual(len(dest.dashboards), 1)
         self.assertEqual(dest.queries[0]["projects"], [int(project["id"])])
+        self.assertEqual(dest.queries[0]["version"], 2)
+        self.assertEqual(len(dest.recent_searches), 1)
+        self.assertEqual(dest.recent_searches[0]["query"], "is:unresolved level:error")
         self.assertEqual([view["name"] for view in dest.views], ["Prod errors"])
         self.assertEqual(dest.forwarders[0]["config"]["token"], "super-secret-splunk-token")
         self.assertEqual(dest.forwarders[0]["project_ids"], [int(project["id"])])
         invited = [member for member in dest.members if member["email"] == "other@example.com"]
         self.assertEqual(len(invited), 1)
         self.assertEqual(invited[0]["orgRole"], "manager")
+        owner = next(member for member in dest.members if member["email"] == "owner@example.com")
+        self.assertIn("backend", owner["teamSlugs"])
         dsn_map = json.loads(Path("dsn-map.json").read_text())
         self.assertEqual({item["key"] for item in dsn_map}, {"Production", "Loader"})
         self.assertTrue(all(item["dsn"].startswith("https://") for item in dsn_map))

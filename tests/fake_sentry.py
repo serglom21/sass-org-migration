@@ -35,6 +35,7 @@ class MemoryOrg:
         self.monitors: list[dict[str, Any]] = []
         self.dashboards: list[dict[str, Any]] = []
         self.queries: list[dict[str, Any]] = []
+        self.recent_searches: list[dict[str, Any]] = []
         self.views: list[dict[str, Any]] = []
         self.forwarders: list[dict[str, Any]] = []
         self.integrations: list[dict[str, Any]] = []
@@ -112,6 +113,8 @@ class FakeSentry:
             return self._collection(org.dashboards, method, body, id_field="title")
         if path == f"/organizations/{slug}/discover/saved/":
             return self._collection(org.queries, method, body)
+        if path == f"/organizations/{slug}/recent-searches/":
+            return self._collection(org.recent_searches, method, body)
         if path == f"/organizations/{slug}/group-search-views/":
             return self._views(org, method, body, params.get("createdBy"))
         if path == f"/organizations/{slug}/forwarding/":
@@ -130,6 +133,10 @@ class FakeSentry:
         team_members = re.fullmatch(rf"/teams/{slug}/([^/]+)/members/?", path)
         if team_members and method == "GET":
             return _ok(_team_roster(org, team_members.group(1)))
+
+        member_team = re.fullmatch(rf"/organizations/{slug}/members/([^/]+)/teams/([^/]+)/?", path)
+        if member_team and method == "POST":
+            return self._add_member_team(org, member_team.group(1), member_team.group(2))
 
         project_create = re.fullmatch(rf"/teams/{slug}/([^/]+)/projects/?", path)
         if project_create and method == "POST":
@@ -215,6 +222,16 @@ class FakeSentry:
         }
         org.members.append(member)
         return _ok(member, 201)
+
+    def _add_member_team(self, org: MemoryOrg, member_id: str, team_slug: str) -> httpx.Response:
+        for member in org.members:
+            if str(member.get("id")) != member_id:
+                continue
+            slugs = member.setdefault("teamSlugs", [])
+            if team_slug not in slugs:
+                slugs.append(team_slug)
+            return _ok(member, 201)
+        return _missing()
 
     def _collection(
         self,
@@ -654,8 +671,10 @@ def seed() -> FakeSentry:
             "query": "transaction:/api",
             "fields": ["transaction", "count()"],
             "queryDataset": "transaction-like",
+            "version": 2,
         }
     )
+    source.recent_searches.append({"id": "rs1", "type": 0, "query": "is:unresolved level:error"})
     source.views.extend(
         [
             {
